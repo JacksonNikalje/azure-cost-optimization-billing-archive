@@ -1,0 +1,96 @@
+Tiered Storage Strategy
+Split the Cosmos DB records into:
+
+Hot Data: Recent records (≤ 3 months) stored in Cosmos DB (read-heavy, low-latency).
+
+Cold Data: Older records (> 3 months) archived in Azure Blob Storage as JSON/CSV (much cheaper).
+
+🧩 Components Involved
+Component	Purpose
+Azure Cosmos DB	Stores hot billing records (≤ 3 months).
+Azure Blob Storage	Stores cold billing records (> 3 months) in compressed form.
+Azure Function (Read)	Checks Cosmos DB first; if not found, reads from Blob Storage.
+Azure Function (Move)	Moves old records from Cosmos DB to Blob Storage periodically.
+Durable Functions	Optionally coordinate large-scale migrations reliably.
+Timer Trigger	Triggers daily/weekly archiving jobs.
+
+✅ How This Meets Your Requirements
+Requirement	How it's Addressed
+Cost Optimization	Move large, infrequently accessed data to Blob Storage, reducing Cosmos DB RU & storage cost.
+Simplicity	Uses native Azure serverless tools (Functions, Blob, Timer) – minimal operational overhead.
+No Data Loss	All records moved, not deleted, with verifiable write to Blob before deletion.
+No Downtime	Async background archiving; APIs stay up throughout.
+No API Changes	Add internal logic in existing function to read from Blob if Cosmos query fails.
+Access Time (Seconds)	Blob Storage retrieval (especially if indexed by partition) easily achieves <3s.
+
+🚀 Implementation Steps
+1. Create Cold Storage in Blob
+Create a container (e.g., cold-billing-records).
+
+Use folder structure: yyyy/mm/dd/recordID.json.
+
+2. Modify Read Logic (Function App / API)
+python
+Copy
+Edit
+def get_billing_record(record_id):
+    # 1. Try Cosmos DB
+    record = cosmos_query(record_id)
+    if record:
+        return record
+
+    # 2. Fallback to Blob
+    blob_path = find_blob_path(record_id)  # Based on ID or metadata
+    return read_blob_record(blob_path)
+You keep the API unchanged; logic is internal.
+
+3. Archival Function (Timer Trigger)
+Runs daily or weekly.
+
+Queries Cosmos DB for records > 3 months old.
+
+Writes them to Blob.
+
+On successful write, deletes from Cosmos DB.
+
+4. Bulk Migration (One-Time Cleanup)
+Use Durable Function to batch-move historical data to cold storage.
+
+Log progress for verification.
+
+5. Optional: Index or Metadata File
+Maintain a lightweight index (index.json) in Blob for fast lookup.
+
+Or derive blob paths from billing record ID hash/timestamp.
+
+💸 Cost Benefits
+Item	Estimated Impact
+Cosmos DB RU reduction	Massive decrease since 75% of data is cold and can be archived.
+Cosmos DB storage	Storage cost drops significantly for large documents.
+Blob storage	~90% cheaper per GB vs Cosmos DB, especially with cool/archive tiers.
+Functions	Inexpensive (serverless, billed per use).
+
+🔐 Security & Compliance
+Ensure Blob Storage is private with RBAC or SAS token-based access.
+
+Use Soft Delete / Immutable Blob Policy if required for audit.
+
+Consider encryption-at-rest and logging via Azure Monitor.
+
+📊 Monitoring & Alerts
+Set alerts for Function failures.
+
+Monitor Cosmos RU usage before & after rollout.
+
+Set logs to confirm every record moved is checksum-verified.
+
+🧪 Testing Plan
+Run on a sample partition and validate:
+
+Read logic correctly falls back to Blob.
+
+Records are not lost.
+
+Performance is acceptable.
+
+Rollout gradually using feature flags or progressive partition targeting.
